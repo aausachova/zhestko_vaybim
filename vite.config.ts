@@ -54,7 +54,13 @@
       outDir: 'build',
     },
     server: {
-      port: 3000,
+      port: 5173,
       open: true,
+      proxy: {
+        '/api': {
+          target: process.env.VITE_PROXY_TARGET || 'http://localhost:4000',
+          changeOrigin: true,
+        },
+      },
     },
   });

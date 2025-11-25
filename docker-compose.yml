@@ -1,0 +1,55 @@
+version: "3.9"
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: vibecodejam-backend
+    environment:
+      - PORT=4000
+      - JWT_SECRET=devsecret
+      - SQLITE_PATH=/data/app.db
+      - DOCKER_HOST=tcp://dind:2375
+    depends_on:
+      - dind
+    ports:
+      - "4000:4000"
+    volumes:
+      - db-data:/data
+    networks:
+      - appnet
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: vibecodejam-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE=/api
+      - VITE_PROXY_TARGET=http://backend:4000
+    networks:
+      - appnet
+
+  dind:
+    image: docker:27.3-dind
+    container_name: vibecodejam-dind
+    privileged: true
+    environment:
+      - DOCKER_TLS_CERTDIR=
+    ports:
+      - "2375:2375"
+    networks:
+      - appnet
+
+volumes:
+  db-data:
+
+networks:
+  appnet:
+    driver: bridge
+
+
