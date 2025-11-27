@@ -78,24 +78,24 @@ Use this table to manage progress. When Done, replace Status and append Implemen
 | Feature | Owner(s) | Status | Implementation references |
 | --- | --- | --- | --- |
 | Architecture diagram (C4/context + component) | Fullstack | todo |  |
-| LLM interview policy + prompt templates | Fullstack | todo |  |
+| LLM interview policy + prompt templates | Fullstack | done | `src/prompts/interview.ts` — Jam persona + autocomplete guardrails |
 | Scibox client integration (dev stub) | Fullstack | todo |  |
 | Adaptive engine: calibration + progression rules | Fullstack | todo |  |
 | Task bank schema + seed format | Backend, Fullstack | todo |  |
 | Realtime transport (WS) contract | Fullstack | todo |  |
-| Browser IDE shell (editor, tabs, run) | Designers | todo |  |
+| Browser IDE shell (editor, tabs, run) | Designers | done | `src/candidate/components/InterviewSession.tsx` — редактор, тесты, автодополнение |
 | Language support v1 (JS/TS, Python) | Backend | todo |  |
 | Execution sandbox API (per‑run limits) | Backend | todo |  |
 | Visible/hidden test runner | Backend | todo |  |
 | Performance probes (time/memory/op count) | Backend | todo |  |
 | Metrics model + persistence | Fullstack, Backend | todo |  |
-| Candidate session UI (chooser, progress) | Designers | todo |  |
-| Interview chat UI (streaming, follow‑ups) | Designers | todo |  |
+| Candidate session UI (chooser, progress) | Designers | done | `src/candidate/CandidateApp.tsx`, `src/candidate/components/SelectionsPage.tsx` |
+| Interview chat UI (streaming, follow‑ups) | Designers | done | `src/candidate/components/InterviewSession.tsx`, `src/services/aiInterview.ts` |
 | Anti‑cheat events (clipboard/devtools/blur) | Fullstack | todo |  |
 | Originality checks pipeline (stub) | Backend | todo |  |
 | HR/Admin dashboard v1 | Designers | todo |  |
 | Reports + export (PDF/CSV) | Fullstack | todo |  |
-| Docker Compose dev env | Backend | todo |  |
+| Docker Compose dev env | Backend | done | `docker-compose.yml`, `Dockerfile.frontend`, `backend/Dockerfile` |
 | Demo script coverage (full list below) | All | todo |  |
 
 ---
