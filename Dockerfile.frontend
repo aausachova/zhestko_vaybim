@@ -1,11 +1,19 @@
 FROM node:20-alpine
+
 WORKDIR /app
-COPY package.json /app/package.json
-COPY vite.config.ts /app/vite.config.ts
-COPY src /app/src
-COPY index.html /app/index.html
-RUN npm install
+
+# install deps with cache reuse
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# copy source after dependencies
+COPY vite.config.ts ./vite.config.ts
+COPY index.html ./index.html
+COPY src ./src
+COPY hr ./hr
+
 EXPOSE 5173
+
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
 
 
