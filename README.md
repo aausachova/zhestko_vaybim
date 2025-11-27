@@ -49,14 +49,41 @@ Notes on DinD:
 ## Scripts
 - Root:
   - `npm run dev` — start Vite on 5173
+- Candidate frontend uses the same dev server; log in as `user/user` to open it
 - Backend:
   - `npm start` — start Express on 4000
 
 ---
 
+## Environment variables
+
+Create `.env` (or `.env.local`) at the repo root:
+
+```
+VITE_OPENROUTER_KEY=sk-or-...   # токен OpenRouter (см. инструкцию ниже)
+VITE_OPENROUTER_REF=https://github.com/shoosh/zhestko_vaybim
+```
+
+- `VITE_OPENROUTER_KEY` — обязательный ключ для запросов к OpenRouter (GPT-5 и Qwen).
+- `VITE_OPENROUTER_REF` — опциональный referer, по умолчанию указывает на репозиторий.
+
+> Пользовательский токен: `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`
+> Сохраните его в `.env`, чтобы AI-интервьюер и автодополнение работали локально.
+
+В Docker-режиме передайте переменные в `docker-compose.yml` или экспортируйте их в окружение перед запуском.
+
+---
+
 ## Where things are
-- Frontend SPA: `src/`
-- Backend API: `backend/`
+- Admin/HR frontend: `src/components/*`
+- Candidate frontend (из `win/`): `src/candidate/*`
+  - Основной вход: `src/candidate/CandidateApp.tsx`
+  - Интервью-сессия: `src/candidate/components/InterviewSession.tsx`
+- Backend API: `backend/server.js`
+- AI/LLM сервисы и промпты:
+  - `src/services/openRouterClient.ts`
+  - `src/services/aiInterview.ts`
+  - `src/prompts/interview.ts`
 - Docker files:
   - `Dockerfile.frontend`
   - `backend/Dockerfile`
@@ -67,5 +94,16 @@ Notes on DinD:
 ## Health check and login
 - Health: `GET /api/health` returns `{ ok: true }`
 - Login: `POST /api/login` body `{ "username": "user", "password": "user" }`
+
+---
+
+## Candidate interview experience
+- Логин `user/user` открывает полнофункциональный кабинет (`src/candidate`).
+- «Отборы» запускают интервью с:
+  - Таймером на 60 минут
+  - Видеопотоком (с разрешения браузера)
+  - Чатом с GPT-5 через OpenRouter (папка `src/prompts`)
+  - Автодополнением при простое >2 секунд (Qwen coder flash)
+- Первое задание скрыто, пока кандидат не обсудит подход с AI. AI отвечает в стиле Jam (Сократика + античит). Autocomplete появляются в отдельной панели с кнопками «Вставить/Скрыть».
 
   

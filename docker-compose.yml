@@ -9,13 +9,11 @@ services:
       - PORT=4000
       - JWT_SECRET=devsecret
       - SQLITE_PATH=/data/app.db
-      - DOCKER_HOST=tcp://dind:2375
-    depends_on:
-      - dind
     ports:
       - "4000:4000"
     volumes:
       - db-data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - appnet
 
@@ -31,17 +29,8 @@ services:
     environment:
       - VITE_API_BASE=/api
       - VITE_PROXY_TARGET=http://backend:4000
-    networks:
-      - appnet
-
-  dind:
-    image: docker:27.3-dind
-    container_name: vibecodejam-dind
-    privileged: true
-    environment:
-      - DOCKER_TLS_CERTDIR=
-    ports:
-      - "2375:2375"
+      - VITE_OPENROUTER_KEY=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
+      - VITE_OPENROUTER_REF=https://github.com/shoosh/zhestko_vaybim
     networks:
       - appnet
 
