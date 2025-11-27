@@ -8,7 +8,6 @@
     resolve: {
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
       alias: {
-        'figma:asset': path.resolve(__dirname, './hr/src/assets'),
         'vaul@1.1.2': 'vaul',
         'sonner@2.0.3': 'sonner',
         'recharts@2.15.2': 'recharts',
@@ -18,6 +17,8 @@
         'next-themes@0.4.6': 'next-themes',
         'lucide-react@0.487.0': 'lucide-react',
         'input-otp@1.4.2': 'input-otp',
+        'figma:asset/d1b9ad995907140f67958f042a7842db9b8e5412.png': path.resolve(__dirname, './src/assets/d1b9ad995907140f67958f042a7842db9b8e5412.png'),
+        'figma:asset/4bcf1d7051c0747feabdc6da508d0a018cccdd94.png': path.resolve(__dirname, './src/assets/4bcf1d7051c0747feabdc6da508d0a018cccdd94.png'),
         'embla-carousel-react@8.6.0': 'embla-carousel-react',
         'cmdk@1.1.1': 'cmdk',
         'class-variance-authority@0.7.1': 'class-variance-authority',
@@ -55,13 +56,7 @@
       outDir: 'build',
     },
     server: {
-      port: 5173,
+      port: 3000,
       open: true,
-      proxy: {
-        '/api': {
-          target: process.env.VITE_PROXY_TARGET || 'http://localhost:4000',
-          changeOrigin: true,
-        },
-      },
     },
   });

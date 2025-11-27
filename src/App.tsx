@@ -1,14 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { HRDashboard } from './admin/HRDashboard';
-import { InterviewSession as AdminInterviewSession } from './admin/InterviewSession';
+import React, { Suspense, lazy, useEffect, useState } from 'react';
 import { AuthForm } from './components/AuthForm';
 import { CandidateApp } from './CandidateApp';
 import type { LoginResponse } from './services/api';
 
-type View = 'hr-dashboard' | 'interview';
+const HrPortal = lazy(() => import('./hr/HrPortal'));
 
 export default function App() {
-  const [currentView, setCurrentView] = useState<View>('hr-dashboard');
   const [auth, setAuth] = useState<LoginResponse | null>(null);
   const [showAuth, setShowAuth] = useState(true);
 
@@ -49,10 +46,16 @@ export default function App() {
     }
 
     if (auth.role === 'admin') {
-      return currentView === 'hr-dashboard' ? (
-        <HRDashboard onNavigate={setCurrentView} />
-      ) : (
-        <AdminInterviewSession onNavigate={setCurrentView} />
+      return (
+        <Suspense
+          fallback={
+            <div className="flex h-screen items-center justify-center text-slate-500">
+              Загружаем HR интерфейс...
+            </div>
+          }
+        >
+          <HrPortal username={auth.username} onSignOut={handleSignOut} />
+        </Suspense>
       );
     }
 
@@ -61,19 +64,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-purple-50">
-      {auth && !showAuth && auth.role === 'admin' && (
-        <div className="p-3 flex items-center justify-end">
-          <div className="flex items-center gap-3">
-            <span className="text-slate-700 text-sm">Здравствуйте, {auth.username} ({auth.role})</span>
-            <button
-              onClick={handleSignOut}
-              className="px-4 py-2 rounded-xl bg-white/80 text-slate-700 hover:bg-white border border-slate-200 shadow"
-            >
-              Выйти
-            </button>
-          </div>
-        </div>
-      )}
       {renderContent()}
     </div>
   );

@@ -93,7 +93,7 @@ Use this table to manage progress. When Done, replace Status and append Implemen
 | Interview chat UI (streaming, follow‑ups) | Designers | done | `src/candidate/components/InterviewSession.tsx`, `src/services/aiInterview.ts` |
 | Anti‑cheat events (clipboard/devtools/blur) | Fullstack | todo |  |
 | Originality checks pipeline (stub) | Backend | todo |  |
-| HR/Admin dashboard v1 | Designers | todo |  |
+| HR/Admin dashboard v1 | Designers | done | `src/App.tsx`, `src/hr/HrPortal.tsx`, `hr/src/App.tsx` — HR вход ведет в новую панель |
 | Reports + export (PDF/CSV) | Fullstack | todo |  |
 | Docker Compose dev env | Backend | done | `docker-compose.yml`, `Dockerfile.frontend`, `backend/Dockerfile` |
 | Demo script coverage (full list below) | All | todo |  |
