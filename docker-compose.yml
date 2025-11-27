@@ -29,7 +29,7 @@ services:
     environment:
       - VITE_API_BASE=/api
       - VITE_PROXY_TARGET=http://backend:4000
-      - VITE_OPENROUTER_KEY=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
+      - VITE_OPENROUTER_KEY=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
       - VITE_OPENROUTER_REF=https://github.com/shoosh/zhestko_vaybim
     networks:
       - appnet

@@ -13,6 +13,8 @@ export interface ParsedTaskSpec {
   condition?: string;
   tests?: string[];
   testCases?: ParsedTestCase[];
+  hiddenTests?: string[];
+  hiddenTestCases?: ParsedTestCase[];
   example?: string;
   examples?: ParsedExampleCase[];
   hint?: string;
@@ -61,6 +63,8 @@ export function parseTaskBlocks(raw: string): ParsedTaskSpec {
   const example = extractBlock(raw, 'пример');
   const hint = extractBlock(raw, 'подсказка');
   const showHintBlock = extractBlock(raw, 'показать подсказку');
+  const hiddenTestsBlock = extractBlocks(raw, 'скрытый_тест');
+  const hiddenTestsAnswers = extractBlocks(raw, 'скрытый_тест_ответ');
   const testInputs = extractBlocks(raw, 'тест');
   const testOutputs = extractBlocks(raw, 'тест_ответ');
   const testCases: ParsedTestCase[] =
@@ -83,6 +87,13 @@ export function parseTaskBlocks(raw: string): ParsedTaskSpec {
         }))
       : [];
   const tests = normalizeLines(testsBlock);
+  const hiddenTestCases: ParsedTestCase[] =
+    hiddenTestsBlock.length || hiddenTestsAnswers.length
+      ? hiddenTestsBlock.map((input, index) => ({
+          input,
+          output: hiddenTestsAnswers[index],
+        }))
+      : [];
   const { timeLimit, memoryLimit } = extractLimits(condition);
   const canShowHint = /^(да|true|show)$/i.test(showHintBlock ?? '');
 
@@ -90,6 +101,8 @@ export function parseTaskBlocks(raw: string): ParsedTaskSpec {
     condition,
     tests,
     testCases: testCases.length ? testCases : undefined,
+    hiddenTests: hiddenTestsBlock.length ? hiddenTestsBlock : undefined,
+    hiddenTestCases: hiddenTestCases.length ? hiddenTestCases : undefined,
     example,
     examples: examples.length ? examples : undefined,
     hint,
