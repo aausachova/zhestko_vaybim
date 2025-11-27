@@ -26,12 +26,15 @@ import {
   TestCasePayload,
 } from '../services/codeRunner';
 import { CodeWorkbench } from './CodeWorkbench';
+import { generateReportInsights } from '../services/reportInsights';
+import { saveInterviewReport } from '../services/reportApi';
+import type { InterviewReportData, LevelReport } from '../types/reports';
 
 interface InterviewSessionProps {
   level: string;
   language?: string;
   token: string;
-  onExit: () => void;
+  onExit: (result?: { reason?: 'user' | 'timeout' | 'terminated'; report?: InterviewReportData | null }) => void;
 }
 
 interface ChatMessage {
@@ -90,6 +93,26 @@ function composeTaskContext(spec: ParsedTaskSpec): string {
 }
 
 const LEVEL_SEQUENCE = ['Junior', 'Middle', 'Senior'] as const;
+type InterviewLevel = (typeof LEVEL_SEQUENCE)[number];
+
+interface LevelMetric {
+  level: InterviewLevel;
+  startedAt: number;
+  finishedAt?: number;
+  visible: { total: number; passed: number };
+  hidden: { total: number; passed: number };
+  attempts: number;
+  status: 'pending' | 'passed' | 'failed';
+}
+
+const createLevelMetric = (level: InterviewLevel): LevelMetric => ({
+  level,
+  startedAt: Date.now(),
+  visible: { total: 0, passed: 0 },
+  hidden: { total: 0, passed: 0 },
+  attempts: 0,
+  status: 'pending',
+});
 
 export function InterviewSession({ level, language = 'JavaScript', token, onExit }: InterviewSessionProps) {
   const initialLevelIndex = LEVEL_SEQUENCE.findIndex((item) => item.toLowerCase() === level.toLowerCase());
@@ -149,6 +172,15 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
   const [videoReady, setVideoReady] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
   const [runnerLogs, setRunnerLogs] = useState<{ id: number; time: string; message: string }[]>([]);
+  const sessionStartRef = useRef(Date.now());
+  const [levelStats, setLevelStats] = useState<Partial<Record<InterviewLevel, LevelMetric>>>(() => ({
+    [currentLevelLabel]: createLevelMetric(currentLevelLabel),
+  }));
+  const [isSavingReport, setIsSavingReport] = useState(false);
+  const [reportSaveError, setReportSaveError] = useState<string | null>(null);
+  const reportSavedRef = useRef(false);
+  const lastReportRef = useRef<InterviewReportData | null>(null);
+  const timerExpiredRef = useRef(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const leftPaneRef = useRef<HTMLDivElement>(null);
   const chatScrollRef = useRef<HTMLDivElement>(null);
@@ -172,6 +204,16 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     setRuntimeOutput(null);
   }, []);
 
+  const updateLevelMetric = useCallback((levelValue: InterviewLevel, updater: (metric: LevelMetric) => LevelMetric) => {
+    setLevelStats((prev) => {
+      const current = prev[levelValue] ?? createLevelMetric(levelValue);
+      return {
+        ...prev,
+        [levelValue]: updater(current),
+      };
+    });
+  }, []);
+
   const appendRunnerLog = useCallback((message: string) => {
     setRunnerLogs((prev) => {
       const entry = {
@@ -184,12 +226,102 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     });
   }, []);
 
+  const buildLevelReports = useCallback((): LevelReport[] => {
+    const now = Date.now();
+    return LEVEL_SEQUENCE.map((label) => levelStats[label])
+      .filter((metric): metric is LevelMetric => Boolean(metric))
+      .map((metric) => ({
+        level: metric.level,
+        status: metric.status,
+        visibleTests: {
+          total: metric.visible.total,
+          passed: metric.visible.passed,
+        },
+        hiddenTests: {
+          total: metric.hidden.total,
+          passed: metric.hidden.passed,
+        },
+        attempts: metric.attempts,
+        durationSeconds: Math.max(0, Math.round(((metric.finishedAt ?? now) - metric.startedAt) / 1000)),
+      }));
+  }, [levelStats]);
+
+  const persistInterviewReport = useCallback(async () => {
+    if (reportSavedRef.current) {
+      return lastReportRef.current;
+    }
+    setIsSavingReport(true);
+    setReportSaveError(null);
+    try {
+      const resolvedLanguage = language ?? 'JavaScript';
+      const levelReports = buildLevelReports();
+      const durationSeconds = Math.max(0, Math.round((Date.now() - sessionStartRef.current) / 1000));
+      const summary = await generateReportInsights({
+        language: resolvedLanguage,
+        levels: levelReports,
+        chatHistory: history,
+        durationSeconds,
+      });
+      const payload = {
+        startedAt: new Date(sessionStartRef.current).toISOString(),
+        finishedAt: new Date().toISOString(),
+        durationSeconds,
+        language: resolvedLanguage,
+        levels: levelReports,
+        summary,
+        rawChat: history,
+      };
+      const { report } = await saveInterviewReport(token, payload);
+      reportSavedRef.current = true;
+      lastReportRef.current = report;
+      setReportSaveError(null);
+      return report;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Не удалось сохранить отчёт';
+      setReportSaveError(message);
+      throw err;
+    } finally {
+      setIsSavingReport(false);
+    }
+  }, [buildLevelReports, history, language, token]);
+
+  const finalizeInterview = useCallback(
+    async (reason: 'user' | 'timeout' | 'terminated') => {
+      try {
+        const report = await persistInterviewReport();
+        onExit({ reason, report: report ?? lastReportRef.current });
+      } catch (err) {
+        console.error('[Interview] failed to finalize session', err);
+      }
+    },
+    [onExit, persistInterviewReport],
+  );
+
   useEffect(() => {
     const timer = setInterval(() => {
       setSecondsLeft((prev) => (prev > 0 ? prev - 1 : 0));
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (secondsLeft === 0 && !timerExpiredRef.current && !reportSavedRef.current) {
+      timerExpiredRef.current = true;
+      finalizeInterview('timeout');
+    }
+  }, [secondsLeft, finalizeInterview]);
+
+  useEffect(() => {
+    setLevelStats((prev) => {
+      if (prev[currentLevelLabel]) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [currentLevelLabel]: createLevelMetric(currentLevelLabel),
+      };
+    });
+  }, [currentLevelLabel]);
 
   useEffect(() => {
     if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
@@ -313,11 +445,9 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
       return;
     }
     setInterviewTerminated(true);
-    setTimeout(() => {
-      alert('Интервью завершено: зафиксировано слишком много предупреждений античита.');
-      onExit();
-    }, 150);
-  }, [warnings, interviewTerminated, onExit]);
+    alert('Интервью завершено: зафиксировано слишком много предупреждений античита.');
+    finalizeInterview('terminated');
+  }, [warnings, interviewTerminated, finalizeInterview]);
 
   useEffect(() => {
     return () => {
@@ -735,6 +865,13 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
       return;
     }
 
+    updateLevelMetric(currentLevelLabel, (metric) => ({
+      ...metric,
+      attempts: metric.attempts + 1,
+      visible: { ...metric.visible, total: Math.max(metric.visible.total, visible.length) },
+      hidden: { ...metric.hidden, total: Math.max(metric.hidden.total, hidden.length) },
+    }));
+
     const plan = [
       ...visible.map((test, index) => ({
         kind: 'visible' as const,
@@ -770,6 +907,8 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     });
 
     const results: TestRunResult[] = [];
+    let visiblePassedCount = 0;
+    let hiddenPassedCount = 0;
     let failure:
       | {
           kind: 'visible' | 'hidden';
@@ -813,6 +952,11 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
           );
           break;
         }
+        if (descriptor.kind === 'visible') {
+          visiblePassedCount += 1;
+        } else {
+          hiddenPassedCount += 1;
+        }
         appendRunnerLog(`${testLabel}: успешно`);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Неизвестная ошибка';
@@ -841,6 +985,14 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     });
     setTestsRunStatus('idle');
 
+    updateLevelMetric(currentLevelLabel, (metric) => ({
+      ...metric,
+      visible: { total: Math.max(metric.visible.total, visible.length), passed: visiblePassedCount },
+      hidden: { total: Math.max(metric.hidden.total, hidden.length), passed: hiddenPassedCount },
+      status: failure ? 'failed' : 'passed',
+      finishedAt: failure ? metric.finishedAt : Date.now(),
+    }));
+
     if (failure) {
       if (failure.kind === 'hidden') {
         handleHiddenTestFailure(failure.reason);
@@ -862,6 +1014,7 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     token,
     handleHiddenTestFailure,
     handlePostTestsSuccess,
+    updateLevelMetric,
   ]);
 
   const handleRunCode = async () => {
@@ -931,7 +1084,7 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
             <Settings className="w-5 h-5" />
           </button>
           <button
-            onClick={onExit}
+            onClick={() => finalizeInterview('user')}
             className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm"
           >
             Завершить интервью

@@ -4,9 +4,14 @@ import { CheckCircle, FileText, ArrowRight } from 'lucide-react';
 interface InterviewCompletedNotificationProps {
   onViewReport: () => void;
   onClose: () => void;
+  canViewReport?: boolean;
 }
 
-export function InterviewCompletedNotification({ onViewReport, onClose }: InterviewCompletedNotificationProps) {
+export function InterviewCompletedNotification({
+  onViewReport,
+  onClose,
+  canViewReport = true,
+}: InterviewCompletedNotificationProps) {
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl max-w-lg w-full p-8">
@@ -41,18 +46,21 @@ export function InterviewCompletedNotification({ onViewReport, onClose }: Interv
         </div>
 
         <div className="flex items-center gap-3">
-          <button 
+          <button
             onClick={onClose}
             className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
           >
             Закрыть
           </button>
-          <button 
+          <button
             onClick={onViewReport}
-            className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+            disabled={!canViewReport}
+            className={`flex-1 px-6 py-3 rounded-lg transition-colors flex items-center justify-center gap-2 ${
+              canViewReport ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-200 text-gray-500 cursor-not-allowed'
+            }`}
           >
-            Просмотреть отчёт
-            <ArrowRight className="w-4 h-4" />
+            {canViewReport ? 'Просмотреть отчёт' : 'Отчёт формируется…'}
+            {canViewReport && <ArrowRight className="w-4 h-4" />}
           </button>
         </div>
       </div>

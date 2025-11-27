@@ -8,6 +8,7 @@
     resolve: {
       extensions: ['.js', '.jsx', '.ts', '.tsx', '.json'],
       alias: {
+        '@hr': path.resolve(__dirname, './hr/src'),
         'figma:asset': path.resolve(__dirname, './hr/src/assets'),
         'vaul@1.1.2': 'vaul',
         'sonner@2.0.3': 'sonner',

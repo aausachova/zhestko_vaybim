@@ -54,7 +54,7 @@ export default function App() {
             </div>
           }
         >
-          <HrPortal username={auth.username} onSignOut={handleSignOut} />
+          <HrPortal username={auth.username} token={auth.token} onSignOut={handleSignOut} />
         </Suspense>
       );
     }

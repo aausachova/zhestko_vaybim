@@ -1,6 +1,14 @@
 
 # VibeCodeJam — Dev and Docker Guide
 
+# Запуск
+Установите Docker, docker-compose. Для этого можно установить Docker Desktop если вы на Windows/Mac
+
+Затем просто из репозитория напишите `docker-compose up --build`
+
+Ключ API вписывается внутри docker-compose.yml, если его нет, то спросите у участников команды.
+
+
 ## Local dev (without Docker)
 
   Run `npm i` to install the dependencies.

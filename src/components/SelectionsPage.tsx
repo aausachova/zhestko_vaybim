@@ -4,6 +4,8 @@ import { InterviewSession } from './InterviewSession';
 import { InterviewPreStartModal } from './InterviewPreStartModal';
 import { InterviewLoadingModal } from './InterviewLoadingModal';
 import { InterviewCompletedNotification } from './InterviewCompletedNotification';
+import { InterviewAnalyticsPage } from './InterviewAnalyticsPage';
+import type { InterviewReportData } from '../types/reports';
 
 interface SelectionsPageProps {
   token: string;
@@ -18,6 +20,7 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
   const [showReportView, setShowReportView] = useState(false);
   const [selectedInterview, setSelectedInterview] = useState<any>(null);
   const [interviewStarted, setInterviewStarted] = useState(false);
+  const [latestReport, setLatestReport] = useState<InterviewReportData | null>(null);
   const baseLevel = 'Junior';
   const languages = [
     { value: 'JavaScript', label: 'JavaScript' },
@@ -77,12 +80,19 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
     setInterviewStarted(true);
   };
 
-  const handleExitInterview = () => {
+  const handleExitInterview = (result?: { report?: InterviewReportData | null }) => {
     setInterviewStarted(false);
     setShowCompletedNotification(true);
+    if (result?.report) {
+      setLatestReport(result.report);
+    }
   };
 
   const handleViewReport = () => {
+    if (!latestReport) {
+      alert('Отчёт ещё формируется, попробуйте чуть позже.');
+      return;
+    }
     setShowCompletedNotification(false);
     setShowReportView(true);
   };
@@ -98,25 +108,34 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
   };
 
   if (showReportView) {
-    // Временно показываем модалку - позже сделаем отдельную страницу
-    return (
-      <div className="max-w-[1400px] mx-auto p-8">
-        <button 
-          onClick={() => setShowReportView(false)}
-          className="mb-4 text-blue-600 hover:text-blue-700"
-        >
-          ← Назад к отборам
-        </button>
-        <div className="bg-white rounded-2xl border border-gray-200 p-8">
-          <h2 className="text-2xl text-gray-900 mb-4">Отчёт по собеседованию</h2>
-          <p className="text-gray-600">Аналитика будет отображаться здесь</p>
+    if (!latestReport) {
+      return (
+        <div className="max-w-[1400px] mx-auto p-8">
+          <button
+            onClick={() => setShowReportView(false)}
+            className="mb-4 text-blue-600 hover:text-blue-700"
+          >
+            ← Назад к отборам
+          </button>
+          <div className="bg-white rounded-2xl border border-gray-200 p-8">
+            <h2 className="text-2xl text-gray-900 mb-2">Отчёт ещё формируется</h2>
+            <p className="text-gray-600">Подождите несколько секунд и попробуйте снова.</p>
+          </div>
         </div>
-      </div>
-    );
+      );
+    }
+    return <InterviewAnalyticsPage report={latestReport} onBack={() => setShowReportView(false)} />;
   }
 
   if (interviewStarted) {
-    return <InterviewSession level={baseLevel} language={selectedLanguage} token={token} onExit={handleExitInterview} />;
+    return (
+      <InterviewSession
+        level={baseLevel}
+        language={selectedLanguage}
+        token={token}
+        onExit={handleExitInterview}
+      />
+    );
   }
 
   return (
@@ -257,6 +276,7 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
         <InterviewCompletedNotification
           onViewReport={handleViewReport}
           onClose={() => setShowCompletedNotification(false)}
+          canViewReport={Boolean(latestReport)}
         />
       )}
 

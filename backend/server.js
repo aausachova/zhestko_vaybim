@@ -41,6 +41,20 @@ async function initDb() {
       password_hash TEXT NOT NULL,
       role TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS interview_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      username TEXT NOT NULL,
+      language TEXT NOT NULL,
+      started_at TEXT,
+      finished_at TEXT,
+      duration_seconds INTEGER,
+      levels_json TEXT NOT NULL,
+      summary_json TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
   `);
 
   const existing = await db.get('SELECT COUNT(*) as count FROM users');
@@ -75,6 +89,93 @@ app.post('/api/login', async (req, res) => {
 
   const token = jwt.sign({ sub: user.id, username: user.username, role: user.role }, JWT_SECRET, { expiresIn: '2h' });
   res.json({ token, role: user.role, username: user.username });
+});
+
+app.get('/api/interviews', auth, async (req, res) => {
+  try {
+    const rows = await db.all(
+      'SELECT id, username, language, started_at, finished_at, duration_seconds, summary_json, created_at FROM interview_reports ORDER BY created_at DESC',
+    );
+    const data = rows.map((row) => ({
+      id: row.id,
+      username: row.username,
+      language: row.language,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+      durationSeconds: row.duration_seconds,
+      summary: JSON.parse(row.summary_json || '{}'),
+      createdAt: row.created_at,
+    }));
+    res.json(data);
+  } catch (err) {
+    console.error('[reports] list error', err);
+    res.status(500).json({ error: 'failed_to_fetch_reports' });
+  }
+});
+
+app.get('/api/interviews/:id', auth, async (req, res) => {
+  try {
+    const row = await db.get('SELECT * FROM interview_reports WHERE id = ?', [req.params.id]);
+    if (!row) {
+      return res.status(404).json({ error: 'not_found' });
+    }
+    res.json({
+      id: row.id,
+      username: row.username,
+      language: row.language,
+      startedAt: row.started_at,
+      finishedAt: row.finished_at,
+      durationSeconds: row.duration_seconds,
+      levels: JSON.parse(row.levels_json || '[]'),
+      summary: JSON.parse(row.summary_json || '{}'),
+      createdAt: row.created_at,
+    });
+  } catch (err) {
+    console.error('[reports] get error', err);
+    res.status(500).json({ error: 'failed_to_fetch_report' });
+  }
+});
+
+app.post('/api/interviews/report', auth, async (req, res) => {
+  const { startedAt, finishedAt, durationSeconds, language, levels, summary } = req.body || {};
+  if (!language || !Array.isArray(levels) || !summary) {
+    return res.status(400).json({ error: 'invalid_payload' });
+  }
+  try {
+    const result = await db.run(
+      `
+        INSERT INTO interview_reports (user_id, username, language, started_at, finished_at, duration_seconds, levels_json, summary_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `,
+      [
+        req.user.sub,
+        req.user.username,
+        language,
+        startedAt ?? null,
+        finishedAt ?? null,
+        durationSeconds ?? null,
+        JSON.stringify(levels),
+        JSON.stringify(summary),
+      ],
+    );
+    const saved = await db.get('SELECT * FROM interview_reports WHERE id = ?', [result.lastID]);
+    res.json({
+      report: {
+        id: saved.id,
+        username: saved.username,
+        language: saved.language,
+        startedAt: saved.started_at,
+        finishedAt: saved.finished_at,
+        durationSeconds: saved.duration_seconds,
+        levels: JSON.parse(saved.levels_json || '[]'),
+        summary: JSON.parse(saved.summary_json || '{}'),
+        createdAt: saved.created_at,
+      },
+    });
+  } catch (err) {
+    console.error('[reports] create error', err);
+    res.status(500).json({ error: 'failed_to_save_report' });
+  }
 });
 
 function auth(req, res, next) {
