@@ -22,7 +22,6 @@ import {
   startCodeRunner,
   stopCodeRunner,
   runUserCode,
-  runUserTests,
   TestRunResult,
   TestCasePayload,
 } from '../services/codeRunner';
@@ -42,7 +41,7 @@ interface ChatMessage {
 }
 
 type TaskTab = 'condition' | 'examples' | 'tests';
-type TestStatus = 'idle' | 'running' | 'passed' | 'failed';
+type TestStatus = 'idle' | 'running' | 'passed' | 'failed' | 'wrong';
 
 const DEFAULT_ACK = 'Хорошо, тогда я сейчас сгенерирую тебе первую задачу.';
 const PANEL_GUIDANCE =
@@ -90,7 +89,13 @@ function composeTaskContext(spec: ParsedTaskSpec): string {
   return sections.join('\n\n').trim();
 }
 
+const LEVEL_SEQUENCE = ['Junior', 'Middle', 'Senior'] as const;
+
 export function InterviewSession({ level, language = 'JavaScript', token, onExit }: InterviewSessionProps) {
+  const initialLevelIndex = LEVEL_SEQUENCE.findIndex((item) => item.toLowerCase() === level.toLowerCase());
+  const [currentLevelIndex, setCurrentLevelIndex] = useState(initialLevelIndex >= 0 ? initialLevelIndex : 0);
+  const [pendingLevelIndex, setPendingLevelIndex] = useState<number | null>(null);
+  const currentLevelLabel = LEVEL_SEQUENCE[currentLevelIndex];
   const initialGreeting = [
     `Привет! Мы начинаем секцию по языку ${language}.`,
     'Интервью длится 1 час: я буду задавать вопросы в чате, а ты объясняешь ход мыслей и пишешь код в редакторе слева.',
@@ -107,7 +112,7 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     },
   ]);
   const [history, setHistory] = useState<OpenRouterMessage[]>([
-    { role: 'system', content: buildInterviewSystemPrompt(level, language) },
+    { role: 'system', content: buildInterviewSystemPrompt(currentLevelLabel, language) },
     { role: 'assistant', content: initialGreeting },
   ]);
   const [input, setInput] = useState('');
@@ -155,6 +160,17 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
   const testsSignatureRef = useRef<string | null>(null);
   const resizeStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
   const runnerLogRef = useRef<HTMLDivElement>(null);
+
+  const resetForNextTask = useCallback(() => {
+    setTaskUnlocked(false);
+    setTaskSpec({});
+    setTestStatuses({});
+    setActiveTaskTab('condition');
+    setCode('');
+    setAutoSuggestion('');
+    setAutoStatus('idle');
+    setRuntimeOutput(null);
+  }, []);
 
   const appendRunnerLog = useCallback((message: string) => {
     setRunnerLogs((prev) => {
@@ -217,8 +233,13 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
       .catch((err: any) => {
         console.error('[IDE] sandbox start failed', err);
         if (!cancelled) {
-          setRunnerError(err instanceof Error ? err.message : 'Не удалось запустить среду выполнения');
-          appendRunnerLog(`Ошибка запуска среды: ${err instanceof Error ? err.message : String(err)}`);
+          const message = err instanceof Error ? err.message : 'Не удалось запустить среду выполнения';
+          setRunnerError(message);
+          if (message === 'invalid token') {
+            appendRunnerLog('JWT недействителен или истёк — выполните вход заново');
+          } else {
+            appendRunnerLog(`Ошибка запуска среды: ${message}`);
+          }
         }
       });
     return () => {
@@ -346,6 +367,8 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
       ...partial,
       tests: partial.tests ?? prev.tests,
       testCases: partial.testCases ?? prev.testCases,
+      hiddenTests: partial.hiddenTests ?? prev.hiddenTests,
+      hiddenTestCases: partial.hiddenTestCases ?? prev.hiddenTestCases,
       example: partial.example ?? prev.example,
       examples: partial.examples ?? prev.examples,
       hint: partial.hint ?? prev.hint,
@@ -375,8 +398,9 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     return { plainOut, raw: state.raw };
   }, []);
 
-  const initializeTestStatuses = useCallback((count: number, signature?: string | null) => {
-    if (!count) {
+  const initializeTestStatuses = useCallback((visibleCount: number, hiddenCount: number, signature?: string | null) => {
+    const total = visibleCount + hiddenCount;
+    if (!total) {
       setTestStatuses({});
       testsSignatureRef.current = null;
       return;
@@ -384,13 +408,16 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     setTestStatuses((prev) => {
       const signatureProvided = typeof signature === 'string';
       const signatureChanged = signatureProvided && signature !== testsSignatureRef.current;
-      const countChanged = Object.keys(prev).length !== count;
+      const countChanged = Object.keys(prev).length !== total;
       if (!signatureChanged && !countChanged) {
         return prev;
       }
       const next: Record<string, TestStatus> = {};
-      Array.from({ length: count }).forEach((_, index) => {
+      Array.from({ length: visibleCount }).forEach((_, index) => {
         next[`test-${index}`] = 'idle';
+      });
+      Array.from({ length: hiddenCount }).forEach((_, index) => {
+        next[`hidden-${index}`] = 'idle';
       });
       if (signatureProvided) {
         testsSignatureRef.current = signature ?? null;
@@ -460,131 +487,203 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     return `${minutes}:${seconds}`;
   }, [secondsLeft]);
 
-  const handleSendMessage = async () => {
-    if (!input.trim() || isSending) return;
-    const trimmed = input.trim();
-    const timestamp = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-    const userMessage: ChatMessage = { from: 'user', text: trimmed, time: timestamp };
-    setMessages((prev) => [...prev, userMessage]);
-    setInput('');
-    setIsSending(true);
-    const awaitingTask = !taskUnlocked;
-    if (awaitingTask) {
-      setIsTaskGenerating(true);
-      setActiveTaskTab('condition');
-    }
+  const handleSendMessage = useCallback(
+    async (forcedText?: string, options?: { expectTask?: boolean }) => {
+      const source = forcedText ?? input;
+      const trimmed = source.trim();
+      if (!trimmed || isSending) return;
+      const timestamp = new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+      const userMessage: ChatMessage = { from: 'user', text: trimmed, time: timestamp };
+      setMessages((prev) => [...prev, userMessage]);
+      if (!forcedText) {
+        setInput('');
+      }
+      setIsSending(true);
+      const awaitingTask = options?.expectTask ?? (!forcedText && !taskUnlocked);
+      if (awaitingTask) {
+        setIsTaskGenerating(true);
+        setActiveTaskTab('condition');
+      }
 
-    const nextHistory: OpenRouterMessage[] = [...history, { role: 'user', content: trimmed }];
-    setHistory(nextHistory);
-
-    try {
-      setIsStreaming(true);
-      setStreamBuffer('');
-      streamStateRef.current = { raw: '', insideTag: false };
-      let finalText = '';
-      let unlockedDuringRun = taskUnlocked;
+      const nextHistory: OpenRouterMessage[] = [...history, { role: 'user', content: trimmed }];
+      setHistory(nextHistory);
 
       try {
-        await streamInterviewTurn({
-          level,
-          language,
-          history: nextHistory,
-          onChunk: (delta) => {
-            if (!delta) return;
-            const { plainOut, raw } = processStreamDelta(delta);
-            finalText = raw;
-            if (plainOut) {
-              setStreamBuffer((prev) => prev + plainOut);
-            }
-            const partial = parseTaskBlocks(raw);
-            if (
-              partial.condition ||
-              partial.tests?.length ||
-              partial.testCases?.length ||
-              partial.examples?.length ||
-              partial.example
-            ) {
-              mergeTaskSpec(partial);
-              const partialTestCount = partial.testCases?.length ?? partial.tests?.length ?? 0;
-              if (partialTestCount) {
-                initializeTestStatuses(partialTestCount, buildTestsSignature(partial.testCases, partial.tests));
-              }
-            }
-            if (!unlockedDuringRun && partial.condition) {
-              unlockedDuringRun = true;
-              setTaskUnlocked(true);
-              setIsTaskGenerating(false);
-            }
-          },
-        });
-      } catch (streamErr) {
-        console.error('[InterviewSession] stream error', streamErr);
-      }
+        setIsStreaming(true);
+        setStreamBuffer('');
+        streamStateRef.current = { raw: '', insideTag: false };
+        let finalText = '';
+        let unlockedDuringRun = taskUnlocked;
 
-      if (!finalText.trim()) {
         try {
-          finalText = await sendInterviewTurn({ level, language, history: nextHistory });
-        } catch (fallbackErr) {
-          console.error('[InterviewSession] fallback chat error', fallbackErr);
-          throw fallbackErr;
+          await streamInterviewTurn({
+            level: currentLevelLabel,
+            language,
+            history: nextHistory,
+            onChunk: (delta) => {
+              if (!delta) return;
+              const { plainOut, raw } = processStreamDelta(delta);
+              finalText = raw;
+              if (plainOut) {
+                setStreamBuffer((prev) => prev + plainOut);
+              }
+              const partial = parseTaskBlocks(raw);
+              if (
+                partial.condition ||
+                partial.tests?.length ||
+                partial.testCases?.length ||
+                partial.hiddenTests?.length ||
+                partial.hiddenTestCases?.length ||
+                partial.examples?.length ||
+                partial.example
+              ) {
+                mergeTaskSpec(partial);
+                const partialTestCount = partial.testCases?.length ?? partial.tests?.length ?? 0;
+                const partialHiddenCount = partial.hiddenTestCases?.length ?? partial.hiddenTests?.length ?? 0;
+                if (partialTestCount || partialHiddenCount) {
+                  initializeTestStatuses(
+                    partialTestCount,
+                    partialHiddenCount,
+                    buildTestsSignature(
+                      partial.testCases,
+                      partial.tests,
+                      partial.hiddenTestCases,
+                      partial.hiddenTests,
+                    ),
+                  );
+                }
+              }
+              if (!unlockedDuringRun && partial.condition) {
+                unlockedDuringRun = true;
+                setTaskUnlocked(true);
+                setIsTaskGenerating(false);
+              }
+            },
+          });
+        } catch (streamErr) {
+          console.error('[InterviewSession] stream error', streamErr);
         }
-      }
 
-      console.debug('[InterviewSession] final AI reply', finalText);
-      const parsed = parseTaskBlocks(finalText);
-      console.debug('[InterviewSession] parsed taskSpec', parsed);
-      const ackOnly = finalText.split('<условие>')[0]?.trim();
-      let chatDisplay = ackOnly || DEFAULT_ACK;
-      const ackHasGuidance =
-        /посмотри на панел/i.test(chatDisplay) || /подсказка/i.test(chatDisplay) || /проговори свой подход/i.test(chatDisplay);
-      if (!guidanceInjected) {
-        if (!ackHasGuidance) {
-          chatDisplay = `${chatDisplay} ${PANEL_GUIDANCE}`.trim();
+        if (!finalText.trim()) {
+          try {
+            finalText = await sendInterviewTurn({ level: currentLevelLabel, language, history: nextHistory });
+          } catch (fallbackErr) {
+            console.error('[InterviewSession] fallback chat error', fallbackErr);
+            throw fallbackErr;
+          }
         }
-        setGuidanceInjected(true);
-      }
-      const aiMessage: ChatMessage = {
-        from: 'ai',
-        text: chatDisplay,
-        time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-      };
-      setMessages((prev) => [...prev, aiMessage]);
-      setHistory((prev) => [...prev, { role: 'assistant', content: finalText }]);
-      if (
-        parsed.condition ||
-        (parsed.tests && parsed.tests.length) ||
-        parsed.example ||
-        parsed.testCases?.length ||
-        parsed.examples?.length
-      ) {
-        mergeTaskSpec(parsed);
-        setActiveTaskTab('condition');
-        const testCount = parsed.testCases?.length ?? parsed.tests?.length ?? 0;
-        initializeTestStatuses(testCount, buildTestsSignature(parsed.testCases, parsed.tests));
-      }
-      if (!taskUnlocked && parsed.condition) {
-        setTaskUnlocked(true);
-        setIsTaskGenerating(false);
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : 'Неизвестная ошибка AI-интервьюера';
-      setMessages((prev) => [
-        ...prev,
-        {
+
+        console.debug('[InterviewSession] final AI reply', finalText);
+        const parsed = parseTaskBlocks(finalText);
+        console.debug('[InterviewSession] parsed taskSpec', parsed);
+        const ackOnly = finalText.split('<условие>')[0]?.trim();
+        let chatDisplay = ackOnly || DEFAULT_ACK;
+        const ackHasGuidance =
+          /посмотри на панел/i.test(chatDisplay) || /подсказка/i.test(chatDisplay) || /проговори свой подход/i.test(chatDisplay);
+        if (!guidanceInjected) {
+          if (!ackHasGuidance) {
+            chatDisplay = `${chatDisplay} ${PANEL_GUIDANCE}`.trim();
+          }
+          setGuidanceInjected(true);
+        }
+        const aiMessage: ChatMessage = {
           from: 'ai',
-          text: `Сбой при общении с интервьюером: ${errorMessage}`,
+          text: chatDisplay,
           time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
-        },
-      ]);
-    } finally {
-      setIsSending(false);
-      setIsStreaming(false);
-      setStreamBuffer('');
-      if (awaitingTask) {
-        setIsTaskGenerating(false);
+        };
+        setMessages((prev) => [...prev, aiMessage]);
+        setHistory((prev) => [...prev, { role: 'assistant', content: finalText }]);
+        if (
+          parsed.condition ||
+          (parsed.tests && parsed.tests.length) ||
+          parsed.example ||
+          parsed.testCases?.length ||
+          parsed.hiddenTests?.length ||
+          parsed.hiddenTestCases?.length ||
+          parsed.examples?.length
+        ) {
+          mergeTaskSpec(parsed);
+          setActiveTaskTab('condition');
+          const testCount = parsed.testCases?.length ?? parsed.tests?.length ?? 0;
+          const hiddenCount = parsed.hiddenTestCases?.length ?? parsed.hiddenTests?.length ?? 0;
+          initializeTestStatuses(
+            testCount,
+            hiddenCount,
+            buildTestsSignature(parsed.testCases, parsed.tests, parsed.hiddenTestCases, parsed.hiddenTests),
+          );
+        }
+        if (!taskUnlocked && parsed.condition) {
+          if (pendingLevelIndex !== null) {
+            setCurrentLevelIndex(pendingLevelIndex);
+            setPendingLevelIndex(null);
+          }
+          setTaskUnlocked(true);
+          setIsTaskGenerating(false);
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Неизвестная ошибка AI-интервьюера';
+        setMessages((prev) => [
+          ...prev,
+          {
+            from: 'ai',
+            text: `Сбой при общении с интервьюером: ${errorMessage}`,
+            time: new Date().toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }),
+          },
+        ]);
+      } finally {
+        setIsSending(false);
+        setIsStreaming(false);
+        setStreamBuffer('');
+        if (awaitingTask) {
+          setIsTaskGenerating(false);
+        }
       }
+    },
+    [
+      currentLevelLabel,
+      history,
+      input,
+      initializeTestStatuses,
+      isSending,
+      language,
+      mergeTaskSpec,
+      processStreamDelta,
+      taskUnlocked,
+      pendingLevelIndex,
+    ],
+  );
+
+  const handleHiddenTestFailure = useCallback(
+    (reason: TestStatus) => {
+      const reasonLabel = reason === 'wrong' ? 'неверный ответ' : 'ошибка выполнения';
+      appendRunnerLog(`Скрытые тесты уровня ${currentLevelLabel} не пройдены (${reasonLabel})`);
+      handleSendMessage(
+        `Платформа: скрытые тесты уровня ${currentLevelLabel} не пройдены — ${reasonLabel}. Помоги кандидату понять, что необходимо поправить, но не раскрывай сами тесты.`,
+        { expectTask: false },
+      );
+    },
+    [appendRunnerLog, currentLevelLabel, handleSendMessage],
+  );
+
+  const handlePostTestsSuccess = useCallback(() => {
+    appendRunnerLog(`Все тесты уровня ${currentLevelLabel} пройдены`);
+    const isFinalLevel = currentLevelIndex >= LEVEL_SEQUENCE.length - 1;
+    if (isFinalLevel) {
+      handleSendMessage(
+        `Платформа: тесты уровня ${currentLevelLabel} пройдены. Задай один-два заключительных вопроса и подведи итог интервью.`,
+        { expectTask: false },
+      );
+      return;
     }
-  };
+    const nextLevelIndex = currentLevelIndex + 1;
+    const nextLabel = LEVEL_SEQUENCE[nextLevelIndex];
+    setPendingLevelIndex(nextLevelIndex);
+    resetForNextTask();
+    handleSendMessage(
+      `Платформа: тесты уровня ${currentLevelLabel} пройдены. Задай один-два вопроса уровня ${currentLevelLabel}, а затем предложи перейти к задаче уровня ${nextLabel}.`,
+      { expectTask: false },
+    );
+  }, [appendRunnerLog, currentLevelIndex, currentLevelLabel, handleSendMessage, resetForNextTask]);
 
   const handleDismissSuggestion = useCallback(() => {
     setAutoSuggestion('');
@@ -613,15 +712,16 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
     if (!taskUnlocked || testsRunStatus === 'running') {
       return;
     }
-    const payload = buildTestPayload(taskSpec);
-    if (!payload.length) {
+    const visible = buildTestPayload(taskSpec);
+    const hidden = buildHiddenTestPayload(taskSpec);
+    if (!visible.length && !hidden.length) {
       setRuntimeOutput({
         type: 'tests',
         status: 'error',
         stdout: '',
-        stderr: 'Нет открытых тестов из условия',
+        stderr: 'Нет тестов из условия',
       });
-      appendRunnerLog('Запуск тестов отменён: нет открытых тестов');
+      appendRunnerLog('Запуск тестов отменён: список тестов пуст');
       return;
     }
     if (!runnerReady) {
@@ -634,59 +734,135 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
       appendRunnerLog('Запуск тестов отменён: среда не готова');
       return;
     }
+
+    const plan = [
+      ...visible.map((test, index) => ({
+        kind: 'visible' as const,
+        index,
+        input: test.input ?? '',
+        expected: test.expected?.trim(),
+        statusKey: `test-${index}`,
+      })),
+      ...hidden.map((test, index) => ({
+        kind: 'hidden' as const,
+        index,
+        input: test.input ?? '',
+        expected: test.expected?.trim(),
+        statusKey: `hidden-${index}`,
+      })),
+    ];
+
     setTestsRunStatus('running');
     setActiveTaskTab('tests');
-    console.log('[IDE] run tests start', { language, total: payload.length });
-    appendRunnerLog(`Запуск тестов (${payload.length})`);
     setRuntimeOutput({ type: 'tests', status: 'running', stdout: '', stderr: '' });
+    appendRunnerLog(
+      `Запуск ${visible.length} открытых и ${hidden.length} скрытых тестов (по одному, остановка при первой ошибке)`,
+    );
     setTestStatuses((prev) => {
       const next = { ...prev };
-      payload.forEach((_, index) => {
-        next[`test-${index}`] = 'running';
+      visible.forEach((_, idx) => {
+        next[`test-${idx}`] = 'idle';
+      });
+      hidden.forEach((_, idx) => {
+        next[`hidden-${idx}`] = 'idle';
       });
       return next;
     });
-    try {
-      const results = await runUserTests(language ?? 'javascript', code, payload, token);
-      console.log('[IDE] run tests result', { total: results.length });
-      setRuntimeOutput({ type: 'tests', status: 'completed', stdout: '', stderr: '', tests: results });
-      const passed = results.filter((res) => res.passed || res.status === 'success').length;
-      const detailed = results
-        .map((res) => {
-          const statusLabel = `Тест ${res.index + 1}: ${res.status}${res.passed === false ? ' (ошибка)' : ''}`;
-          const stdoutLine = summarizeChannel('stdout', res.stdout ?? '');
-          const stderrLine = summarizeChannel('stderr', res.stderr ?? '');
-          return [statusLabel, stdoutLine, stderrLine].filter(Boolean).join('\n');
-        })
-        .join('\n—\n');
-      appendRunnerLog(`Тесты выполнены: ${passed}/${results.length}\n${detailed}`);
-      setTestStatuses((prev) => {
-        const next = { ...prev };
-        results.forEach((res) => {
-          const key = `test-${res.index}`;
-          const passedCase = res.passed ?? (res.status === 'success');
-          next[key] = passedCase ? 'passed' : 'failed';
+
+    const results: TestRunResult[] = [];
+    let failure:
+      | {
+          kind: 'visible' | 'hidden';
+          index: number;
+          reason: TestStatus;
+          stderr?: string;
+        }
+      | null = null;
+    const runtimeLanguage = (language ?? 'javascript').toLowerCase();
+
+    for (const descriptor of plan) {
+      const statusKey = descriptor.statusKey;
+      const testLabel = descriptor.kind === 'hidden' ? `Скрытый тест ${descriptor.index + 1}` : `Тест ${descriptor.index + 1}`;
+      setTestStatuses((prev) => ({ ...prev, [statusKey]: 'running' }));
+      appendRunnerLog(`${testLabel}: запуск`);
+      try {
+        const runResult = await runUserCode(runtimeLanguage, code, token, descriptor.input);
+        const normalizedStdout = (runResult.stdout ?? '').trim();
+        const expected = descriptor.expected;
+        let status: TestStatus = 'passed';
+        let passed = true;
+        if (runResult.status !== 'success') {
+          status = 'failed';
+          passed = false;
+        } else if (expected && normalizedStdout !== expected) {
+          status = 'wrong';
+          passed = false;
+        }
+        setTestStatuses((prev) => ({ ...prev, [statusKey]: status }));
+        results.push({
+          ...runResult,
+          index: descriptor.index,
+          passed,
+          kind: descriptor.kind,
+          expected,
         });
-        return next;
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Неизвестная ошибка при запуске тестов';
-      console.error('[IDE] run tests error', err);
-      setRuntimeOutput({ type: 'tests', status: 'error', stdout: '', stderr: message });
-      appendRunnerLog(`Ошибка при запуске тестов: ${message}`);
-      setTestStatuses((prev) => {
-        const next = { ...prev };
-        Object.keys(next).forEach((key) => {
-          if (next[key] === 'running') {
-            next[key] = 'idle';
-          }
+        if (!passed) {
+          failure = { kind: descriptor.kind, index: descriptor.index, reason: status, stderr: runResult.stderr ?? undefined };
+          appendRunnerLog(
+            `${testLabel}: ${status === 'wrong' ? 'неверный ответ (ожидалось другое значение)' : 'ошибка выполнения'}`,
+          );
+          break;
+        }
+        appendRunnerLog(`${testLabel}: успешно`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Неизвестная ошибка';
+        setTestStatuses((prev) => ({ ...prev, [statusKey]: 'failed' }));
+        results.push({
+          status: 'error',
+          stdout: '',
+          stderr: message,
+          index: descriptor.index,
+          passed: false,
+          kind: descriptor.kind,
+          expected: descriptor.expected,
         });
-        return next;
-      });
-    } finally {
-      setTestsRunStatus('idle');
+        failure = { kind: descriptor.kind, index: descriptor.index, reason: 'failed', stderr: message };
+        appendRunnerLog(`${testLabel}: ошибка запуска — ${message}`);
+        break;
+      }
     }
-  }, [appendRunnerLog, taskUnlocked, taskSpec, testsRunStatus, runnerReady, language, code, token]);
+
+    setRuntimeOutput({
+      type: 'tests',
+      status: failure ? 'error' : 'completed',
+      stdout: '',
+      stderr: failure ? 'Часть тестов не пройдена' : '',
+      tests: results,
+    });
+    setTestsRunStatus('idle');
+
+    if (failure) {
+      if (failure.kind === 'hidden') {
+        handleHiddenTestFailure(failure.reason);
+      } else {
+        appendRunnerLog('Открытый тест не пройден — исправьте решение и попробуйте снова');
+      }
+      return;
+    }
+
+    handlePostTestsSuccess();
+  }, [
+    appendRunnerLog,
+    taskUnlocked,
+    testsRunStatus,
+    runnerReady,
+    taskSpec,
+    language,
+    code,
+    token,
+    handleHiddenTestFailure,
+    handlePostTestsSuccess,
+  ]);
 
   const handleRunCode = async () => {
     if (!taskUnlocked || codeRunStatus === 'running') return;
@@ -739,7 +915,7 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
             <span className="text-gray-900 text-sm">Интервью в процессе</span>
           </div>
           <span className="text-gray-400 text-sm">•</span>
-          <span className="text-gray-600 text-sm">Уровень: {level}</span>
+          <span className="text-gray-600 text-sm">Уровень: {currentLevelLabel}</span>
           <span className="text-gray-400 text-sm">•</span>
           <span className="flex items-center gap-1 text-gray-600 text-sm">
             <Clock className="w-4 h-4" />
@@ -1058,7 +1234,7 @@ export function InterviewSession({ level, language = 'JavaScript', token, onExit
                 disabled={isSending}
               />
               <button
-                onClick={handleSendMessage}
+                onClick={() => handleSendMessage()}
                 className="p-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
                 disabled={isSending}
               >
@@ -1207,7 +1383,13 @@ function TaskPanel({ spec, activeTab, onTabChange, onCopyCondition, testStatuses
         )}
         {activeTab === 'examples' && <ExamplesTab examples={spec.examples} fallbackExample={spec.example} />}
         {activeTab === 'tests' && (
-          <TestsTab detailedTests={spec.testCases} fallbackTests={spec.tests} testStatuses={testStatuses} />
+          <TestsTab
+            detailedTests={spec.testCases}
+            fallbackTests={spec.tests}
+            hiddenTestCases={spec.hiddenTestCases}
+            hiddenFallbackTests={spec.hiddenTests}
+            testStatuses={testStatuses}
+          />
         )}
       </div>
     </div>
@@ -1289,66 +1471,86 @@ function ExamplesTab({
 interface TestsTabProps {
   detailedTests?: ParsedTestCase[];
   fallbackTests?: string[];
+  hiddenTestCases?: ParsedTestCase[];
+  hiddenFallbackTests?: string[];
   testStatuses: Record<string, TestStatus>;
 }
 
-function TestsTab({ detailedTests, fallbackTests, testStatuses }: TestsTabProps) {
-  const tests = detailedTests?.length ? detailedTests : undefined;
-  const fallback = !tests ? fallbackTests ?? [] : [];
-  const total = tests?.length ?? fallback.length;
+function TestsTab({ detailedTests, fallbackTests, hiddenTestCases, hiddenFallbackTests, testStatuses }: TestsTabProps) {
+  const visible = detailedTests?.length ? detailedTests : undefined;
+  const visibleFallback = !visible ? fallbackTests ?? [] : [];
+  const hidden = hiddenTestCases?.length ? hiddenTestCases : undefined;
+  const hiddenFallback = !hidden ? hiddenFallbackTests ?? [] : [];
+  const visibleTotal = visible?.length ?? visibleFallback.length;
+  const hiddenTotal = hidden?.length ?? hiddenFallback.length;
 
-  if (!total) {
+  if (!visibleTotal && !hiddenTotal) {
     return (
-      <div className="h-full flex items-center justify-center text-sm text-gray-500">Открытых тестов нет</div>
+      <div className="h-full flex items-center justify-center text-sm text-gray-500">Тестов нет</div>
     );
   }
 
   return (
-    <div className="p-4 h-full overflow-y-auto space-y-4 min-h-0">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-700">Открытые тесты</p>
+    <div className="p-4 h-full overflow-y-auto space-y-6 min-h-0">
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-gray-700">Открытые тесты</p>
+        </div>
+
+        {visibleTotal ? (
+          (visible ?? visibleFallback).map((test, index) => {
+            const id = `test-${index}`;
+            const status = testStatuses[id] ?? 'idle';
+            const input = (test as ParsedTestCase)?.input ?? (typeof test === 'string' ? test : '');
+            const output = (test as ParsedTestCase)?.output;
+            return (
+              <div key={id} className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-900">Тест {index + 1}</span>
+                  <StatusBadge status={status} />
+                </div>
+                {input && (
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-gray-600 mb-1">Ввод</p>
+                    <pre className="text-xs bg-white border border-gray-200 rounded p-2 whitespace-pre-wrap">{input}</pre>
+                  </div>
+                )}
+                {output && (
+                  <div>
+                    <p className="text-xs uppercase tracking-wide text-gray-600 mb-1">Ожидаемый вывод</p>
+                    <pre className="text-xs bg-white border border-gray-200 rounded p-2 whitespace-pre-wrap">{output}</pre>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        ) : (
+          <p className="text-xs text-gray-500">Открытых тестов нет</p>
+        )}
       </div>
 
-      <div className="space-y-3">
-        {tests
-          ? tests.map((test, index) => {
-              const id = `test-${index}`;
-              const status = testStatuses[id] ?? 'idle';
-              return (
-                <div key={id} className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-900">Тест {index + 1}</span>
-                    <StatusBadge status={status} />
-                  </div>
-                  {test.input && (
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-gray-600 mb-1">Ввод</p>
-                      <pre className="text-xs bg-white border border-gray-200 rounded p-2 whitespace-pre-wrap">{test.input}</pre>
-                    </div>
-                  )}
-                  {test.output && (
-                    <div>
-                      <p className="text-xs uppercase tracking-wide text-gray-600 mb-1">Ожидаемый вывод</p>
-                      <pre className="text-xs bg-white border border-gray-200 rounded p-2 whitespace-pre-wrap">{test.output}</pre>
-                    </div>
-                  )}
+      {hiddenTotal > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-gray-700">Скрытые тесты</p>
+            <span className="text-[11px] text-gray-500">Содержимое скрыто, прогоняется автоматически</span>
+          </div>
+
+          {(hidden ?? hiddenFallback).map((_, index) => {
+            const id = `hidden-${index}`;
+            const status = testStatuses[id] ?? 'idle';
+            return (
+              <div key={id} className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-gray-900">Скрытый тест {index + 1}</span>
+                  <StatusBadge status={status} />
                 </div>
-              );
-            })
-          : fallback.map((test, index) => {
-              const id = `test-${index}`;
-              const status = testStatuses[id] ?? 'idle';
-              return (
-                <div key={id} className="border border-gray-200 rounded-lg p-3 bg-gray-50 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-900">Тест {index + 1}</span>
-                    <StatusBadge status={status} />
-                  </div>
-                  <pre className="text-xs bg-white border border-gray-200 rounded p-2 whitespace-pre-wrap">{test}</pre>
-                </div>
-              );
-            })}
-      </div>
+                <p className="text-xs text-gray-500">Детали скрыты. Результат отображается после прогона.</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1358,13 +1560,15 @@ function StatusBadge({ status }: { status: TestStatus }) {
     idle: 'не запущен',
     running: 'в прогоне',
     passed: 'успешно',
-    failed: 'ошибка',
+    failed: 'ошибка выполнения',
+    wrong: 'неверный ответ',
   };
   const classMap: Record<TestStatus, string> = {
     idle: 'bg-gray-200 text-gray-700',
     running: 'bg-blue-100 text-blue-700 animate-pulse',
     passed: 'bg-green-100 text-green-700',
     failed: 'bg-red-100 text-red-700',
+    wrong: 'bg-amber-100 text-amber-700',
   };
 
   return (
@@ -1411,12 +1615,31 @@ function buildTestPayload(spec: ParsedTaskSpec): TestCasePayload[] {
   return [];
 }
 
-function buildTestsSignature(testCases?: ParsedTestCase[], tests?: string[]) {
-  if (testCases?.length) {
-    return testCases.map(({ input = '', output = '' }) => `${input}::${output}`).join('|');
+function buildHiddenTestPayload(spec: ParsedTaskSpec): TestCasePayload[] {
+  if (spec.hiddenTestCases?.length) {
+    return spec.hiddenTestCases.map((test) => ({
+      input: test.input ?? '',
+      expected: test.output ?? undefined,
+    }));
   }
-  if (tests?.length) {
-    return tests.join('|');
+  if (spec.hiddenTests?.length) {
+    return spec.hiddenTests.map((input) => ({ input }));
   }
-  return null;
+  return [];
+}
+
+function buildTestsSignature(
+  testCases?: ParsedTestCase[],
+  tests?: string[],
+  hiddenCases?: ParsedTestCase[],
+  hiddenTests?: string[],
+) {
+  const visibleSignature = testCases?.length
+    ? testCases.map(({ input = '', output = '' }) => `${input}::${output}`).join('|')
+    : tests?.join('|');
+  const hiddenSignature = hiddenCases?.length
+    ? hiddenCases.map(({ input = '', output = '' }) => `hidden:${input}::${output}`).join('|')
+    : hiddenTests?.map((input) => `hidden:${input}`).join('|');
+  if (visibleSignature && hiddenSignature) return `${visibleSignature}||${hiddenSignature}`;
+  return visibleSignature || hiddenSignature || null;
 }

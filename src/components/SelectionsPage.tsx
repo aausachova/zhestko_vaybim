@@ -10,7 +10,6 @@ interface SelectionsPageProps {
 }
 
 export function SelectionsPage({ token }: SelectionsPageProps) {
-  const [showStartModal, setShowStartModal] = useState(false);
   const [showPreStartModal, setShowPreStartModal] = useState(false);
   const [showLoadingModal, setShowLoadingModal] = useState(false);
   const [showCompletedNotification, setShowCompletedNotification] = useState(false);
@@ -19,10 +18,10 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
   const [showReportView, setShowReportView] = useState(false);
   const [selectedInterview, setSelectedInterview] = useState<any>(null);
   const [interviewStarted, setInterviewStarted] = useState(false);
-  const [selectedLevel, setSelectedLevel] = useState('');
+  const baseLevel = 'Junior';
   const languages = [
     { value: 'JavaScript', label: 'JavaScript' },
-    { value: 'TypeScript', label: 'TypeScript' },
+    { value: 'C++', label: 'C++' },
     { value: 'Python', label: 'Python' },
     { value: 'Go', label: 'Go' },
   ];
@@ -67,12 +66,6 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
       status: 'scheduled',
     },
   ];
-
-  const handleLevelSelected = (level: string) => {
-    setSelectedLevel(level);
-    setShowStartModal(false);
-    setShowPreStartModal(true);
-  };
 
   const handleStartInterview = () => {
     setShowPreStartModal(false);
@@ -123,7 +116,7 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
   }
 
   if (interviewStarted) {
-    return <InterviewSession level={selectedLevel} language={selectedLanguage} token={token} onExit={handleExitInterview} />;
+    return <InterviewSession level={baseLevel} language={selectedLanguage} token={token} onExit={handleExitInterview} />;
   }
 
   return (
@@ -132,6 +125,27 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
       <div className="mb-8">
         <h1 className="text-3xl mb-2">Отборы</h1>
         <p className="text-sm text-gray-500">Пройдите собеседование с AI-интервьюером</p>
+      </div>
+
+      {/* Language Selection */}
+      <div className="mb-8">
+        <p className="text-sm text-gray-600 mb-3">Язык собеседования</p>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          {languages.map((lang) => (
+            <button
+              key={lang.value}
+              onClick={() => setSelectedLanguage(lang.value)}
+              className={`px-4 py-3 rounded-xl border-2 text-left transition-all ${
+                selectedLanguage === lang.value
+                  ? 'border-blue-600 bg-blue-50 text-blue-700'
+                  : 'border-gray-200 hover:border-blue-300'
+              }`}
+            >
+              <div className="text-base text-gray-900">{lang.label}</div>
+              <div className="text-xs text-gray-500">IDE и тесты для этого стека</div>
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Interview Types */}
@@ -152,7 +166,7 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
               <p className="text-sm text-gray-500 mb-6">{interview.description}</p>
 
               <button 
-                onClick={() => setShowStartModal(true)}
+                onClick={() => setShowPreStartModal(true)}
                 className={`w-full px-6 py-3 rounded-lg text-white transition-colors ${
                   interview.color === 'blue' 
                     ? 'bg-blue-600 hover:bg-blue-700' 
@@ -224,91 +238,6 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
         </div>
       </div>
 
-      {/* Start Interview Modal */}
-      {showStartModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-8">
-            <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <Target className="w-8 h-8 text-blue-600" />
-              </div>
-              <h2 className="text-2xl text-gray-900 mb-2">Выберите уровень собеседования</h2>
-              <p className="text-sm text-gray-500">
-                AI-интервьюер адаптирует сложность задач под ваш уровень
-              </p>
-            </div>
-
-            <div className="mb-6">
-              <p className="text-sm text-gray-600 mb-3">Язык собеседования</p>
-              <div className="grid grid-cols-2 gap-3">
-                {languages.map((lang) => (
-                  <button
-                    key={lang.value}
-                    onClick={() => setSelectedLanguage(lang.value)}
-                    className={`px-4 py-3 rounded-xl border-2 text-left transition-all ${
-                      selectedLanguage === lang.value
-                        ? 'border-blue-600 bg-blue-50 text-blue-700'
-                        : 'border-gray-200 hover:border-blue-300'
-                    }`}
-                  >
-                    <div className="text-base text-gray-900">{lang.label}</div>
-                    <div className="text-xs text-gray-500">IDE и тесты для этого стека</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-3 mb-6">
-              <button 
-                onClick={() => handleLevelSelected('Junior')}
-                className="w-full p-4 border-2 border-gray-200 rounded-xl hover:border-blue-600 hover:bg-blue-50 transition-all text-left"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-base text-gray-900 mb-1">Junior</div>
-                    <div className="text-sm text-gray-500">Начальный уровень, базовые задачи</div>
-                  </div>
-                  <ArrowRight className="w-5 h-5 text-gray-400" />
-                </div>
-              </button>
-
-              <button 
-                onClick={() => handleLevelSelected('Middle')}
-                className="w-full p-4 border-2 border-gray-200 rounded-xl hover:border-blue-600 hover:bg-blue-50 transition-all text-left"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-base text-gray-900 mb-1">Middle</div>
-                    <div className="text-sm text-gray-500">Средний уровень, практические задачи</div>
-                  </div>
-                  <ArrowRight className="w-5 h-5 text-gray-400" />
-                </div>
-              </button>
-
-              <button 
-                onClick={() => handleLevelSelected('Senior')}
-                className="w-full p-4 border-2 border-gray-200 rounded-xl hover:border-blue-600 hover:bg-blue-50 transition-all text-left"
-              >
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-base text-gray-900 mb-1">Senior</div>
-                    <div className="text-sm text-gray-500">Продвинутый уровень, сложные задачи</div>
-                  </div>
-                  <ArrowRight className="w-5 h-5 text-gray-400" />
-                </div>
-              </button>
-            </div>
-
-            <button 
-              onClick={() => setShowStartModal(false)}
-              className="w-full px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors"
-            >
-              Отмена
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Loading Modal */}
       {showLoadingModal && (
         <InterviewLoadingModal onComplete={handleLoadingComplete} />
@@ -317,7 +246,7 @@ export function SelectionsPage({ token }: SelectionsPageProps) {
       {/* Pre-Start Modal */}
       {showPreStartModal && (
         <InterviewPreStartModal
-          level={selectedLevel}
+          level={baseLevel}
           onStart={handleStartInterview}
           onCancel={() => setShowPreStartModal(false)}
         />
